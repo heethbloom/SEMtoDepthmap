@@ -94,7 +94,7 @@ class Unet(nn.Module):
         self.in_dim = in_dim
         self.out_dim = out_dim
         self.num_filter = num_filter
-        act_fn = nn.LeakyReLU(0.2, inplace=True)
+        act_fn = nn.LeakyReLU(0.1, inplace=True)
 
         print("\n------Initiating mini U-Net------\n")
 
@@ -102,9 +102,13 @@ class Unet(nn.Module):
         self.pool_1 = maxpool((3,3))
         self.down_2 = conv_block(self.num_filter*1,self.num_filter*2,act_fn , 3, 1)
         self.pool_2 = maxpool((2,3))
+        self.down_3 = conv_block(self.num_filter*2,self.num_filter*4,act_fn , 3, 1)
+        self.pool_3 = maxpool((3,2))
         
-        self.bridge = conv_block(self.num_filter*2,self.num_filter*4,act_fn, 3, 1)
+        self.bridge = conv_block(self.num_filter*4,self.num_filter*8,act_fn, 3, 1)
     
+        self.trans_2 = conv_trans_block(self.num_filter*8,self.num_filter*4,act_fn, 3, (3,2), (1,0), (1,0))
+        self.up_2 = conv_block(self.num_filter*8,self.num_filter*4,act_fn, 3, 1)
         self.trans_3 = conv_trans_block(self.num_filter*4,self.num_filter*2,act_fn, 3, (2,3), (1,0), (1,0))
         self.up_3 = conv_block(self.num_filter*4,self.num_filter*2,act_fn, 3, 1)
         self.trans_4 = conv_trans_block(self.num_filter*2, self.num_filter*1, act_fn, 3, 3, 0, 0)
@@ -116,10 +120,14 @@ class Unet(nn.Module):
         pool_1 = self.pool_1(down_1) # torch.Size([128, 64, 22, 15])
         down_2 = self.down_2(pool_1) #  torch.Size([128, 128, 22, 15])
         pool_2 = self.pool_2(down_2) # torch.Size([128, 128, 11, 5])
+        down_3 = self.down_3(pool_2) #  torch.Size([128, 256, 11, 5])
+        pool_3 = self.pool_3(down_3) # torch.Size([128, 256, 4, 2])
 
-        bridge = self.bridge(pool_2) # torch.Size([128, 256, 11, 5])
-        
-        trans_3 = self.trans_3(bridge) # torch.Size([128, 128, 22, 15])
+        bridge = self.bridge(pool_3) # torch.Size([128, 512, 4, 2])
+        trans_2 = self.trans_2(bridge) # torch.Size([128, 256, 11, 5])
+        concat_2 = torch.cat([trans_2,down_3],dim=1) #  torch.Size([128, 512, 11, 5])
+        up_2 = self.up_2(concat_2) # torch.Size([128, 256, 11, 5])
+        trans_3 = self.trans_3(up_2) # torch.Size([128, 128, 22, 15])
         concat_3 = torch.cat([trans_3,down_2],dim=1) #  torch.Size([128, 256, 22, 15])
         up_3 = self.up_3(concat_3) # torch.Size([128, 128, 22, 15])
         trans_4 = self.trans_4(up_3) # trans_4: torch.Size([128, 64, 66, 45])
@@ -138,11 +146,11 @@ num_filters = 64
 
 net = Unet(in_dim=in_dim,out_dim=out_dim,num_filter=num_filters).to(device) 
 criterion = nn.MSELoss()
-optimizer = optim.Adam(net.parameters(), lr=5*1e-3)
+optimizer = optim.Adam(net.parameters(), lr= 1e-3)
 
 
 # hyper-parameters
-num_epochs = 10
+num_epochs = 15
 num_batches = len(train_dataloader)
 
 trn_loss_list = []
@@ -153,7 +161,7 @@ for epoch in range(num_epochs):
         x, sample = data[0].to(device), data[1].to(device)
         optimizer.zero_grad()
         model_output = net(x)
-        loss = criterion(model_output, sample)
+        loss = torch.sqrt(criterion(model_output, sample))
         loss.backward()
         optimizer.step()
         trn_loss += loss.item()
@@ -168,7 +176,7 @@ for epoch in range(num_epochs):
                 for j, val in enumerate(valid_dataloader):
                     val_x, val_sample = val[0].to(device), val[1].to(device) 
                     val_output = net(val_x)
-                    v_loss = criterion(val_output, val_sample)
+                    v_loss = torch.sqrt(criterion(val_output, val_sample))
                     val_loss += v_loss
                        
             print("epoch: {}/{} | step: {}/{} | trn loss: {:.4f} | val loss: {:.4f}".format(
